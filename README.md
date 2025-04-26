@@ -10,6 +10,8 @@
 - Respects `hx-disinherit="global-indicator"`.
 - Light and dark mode compatible.
 
+![Demo](./demo.gif)
+
 ## Installation
 
 ```html
