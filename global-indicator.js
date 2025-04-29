@@ -15,11 +15,75 @@ htmx.defineExtension("global-indicator", {
       }
       var target = evt.detail.target;
       var xhr = evt.detail.xhr;
-      target.classList.add("htmx-loading");
+
+      // Ensure the container is relatively positioned
+      if (getComputedStyle(target).position === 'static') {
+        target.style.position = 'relative';
+      }
+
+      // Create overlay
+      var overlay = document.createElement("div");
+      overlay.className = "htmx-global-indicator-overlay";
+      overlay.style.position = "absolute";
+      overlay.style.background = window.document.documentElement.classList.contains('dark') ? "rgba(0,0,0,0.85)" : "rgba(255,255,255,0.85)";
+      overlay.style.backdropFilter = "blur(2px)";
+      overlay.style.zIndex = 99998;
+      overlay.style.pointerEvents = "none";
+      overlay.style.animation = "fadeIn 0.1s linear";
+      overlay.style.borderRadius = getComputedStyle(target).borderRadius;
+      overlay.style.transition = "background 0.2s";
+
+      // Create spinner
+      var spinner = document.createElement("div");
+      spinner.className = "htmx-global-indicator-spinner";
+      spinner.style.position = "absolute";
+      spinner.style.width = "3rem";
+      spinner.style.height = "3rem";
+      spinner.style.border = "3px solid";
+      spinner.style.borderColor = window.document.documentElement.classList.contains('dark') ? "white transparent white transparent" : "#2563eb transparent #2563eb transparent";
+      spinner.style.borderRadius = "50%";
+      spinner.style.animation = "spin 0.7s ease-in-out infinite";
+      spinner.style.zIndex = 99999;
+      spinner.style.pointerEvents = "none";
+      spinner.style.display = "none";
+
+      // Function to update overlay/spinner position/size
+      function updateOverlay() {
+        if (target === document.body) {
+          overlay.style.position = 'fixed';
+          overlay.style.top = 0;
+          overlay.style.left = 0;
+          overlay.style.width = '100vw';
+          overlay.style.height = '100vh';
+          spinner.style.position = 'fixed';
+          spinner.style.top = '50%';
+          spinner.style.left = '50%';
+          spinner.style.transform = 'translate(-50%, -50%)';
+        } else {
+          overlay.style.position = 'absolute';
+          overlay.style.top = target.scrollTop + "px";
+          overlay.style.left = target.scrollLeft + "px";
+          overlay.style.width = target.clientWidth + "px";
+          overlay.style.height = target.clientHeight + "px";
+          spinner.style.position = 'absolute';
+          spinner.style.top = (target.scrollTop + target.clientHeight / 2) + "px";
+          spinner.style.left = (target.scrollLeft + target.clientWidth / 2) + "px";
+          spinner.style.transform = 'translate(-50%, -50%)';
+        }
+      }
+
+      updateOverlay();
+      target.appendChild(overlay);
+      target.appendChild(spinner);
+
+      target.addEventListener('scroll', updateOverlay);
+      window.addEventListener('resize', updateOverlay);
+
       var spinnerTimer = setTimeout(function () {
-        target.classList.add("show-spinner");
+        spinner.style.display = "block";
       }, spinnerDelay);
-      indicatorMap.set(xhr, { el: target, timer: spinnerTimer });
+
+      indicatorMap.set(xhr, { el: target, overlay, spinner, timer: spinnerTimer, updateOverlay });
     } else if (
       name === "htmx:afterRequest" ||
       name === "htmx:responseError" ||
@@ -35,8 +99,10 @@ htmx.defineExtension("global-indicator", {
       var entry = indicatorMap.get(xhr);
       if (entry) {
         clearTimeout(entry.timer);
-        entry.el.classList.remove("show-spinner");
-        entry.el.classList.remove("htmx-loading");
+        if (entry.overlay && entry.overlay.parentNode) entry.overlay.parentNode.removeChild(entry.overlay);
+        if (entry.spinner && entry.spinner.parentNode) entry.spinner.parentNode.removeChild(entry.spinner);
+        entry.el.removeEventListener('scroll', entry.updateOverlay);
+        window.removeEventListener('resize', entry.updateOverlay);
         indicatorMap.delete(xhr);
       }
     }
@@ -44,43 +110,13 @@ htmx.defineExtension("global-indicator", {
 });
 var style = document.createElement("style");
 style.textContent = `
-        .htmx-loading { position: relative; overflow: hidden; }
-        .htmx-loading::before {
-          position: absolute;
-          content: '';
-          top: 0; left: 0;
-          width: 100%; height: 100%;
-          background: rgba(255, 255, 255, 0.85);
-          backdrop-filter: blur(2px);
-          z-index: 99998;
-          animation: fadeIn 0.1s linear;
-        }
         @keyframes fadeIn {
           from { opacity: 0; }
           to { opacity: 1; }
         }
-        .dark .htmx-loading::before {
-            background: rgba(0, 0, 0, 0.85);
-        }
-        .htmx-loading.show-spinner::after {
-          position: absolute;
-          content: '';
-          top: 50%; left: 50%;
-          width: 3rem; height: 3rem;
-          margin: -1.5rem 0 0 -1.5rem;
-          border: 3px solid;
-          border-color: #2563eb transparent #2563eb transparent;
-          border-radius: 50%;
-          animation: spin 0.7s ease-in-out infinite;
-          z-index: 99999;
-        }
-        .dark .htmx-loading.show-spinner::after {
-            border-color: white transparent white transparent;
-        }
-        @keyframes spin { 
-            from { transform: rotate(0deg); }
-            to { transform: rotate(360deg); } 
+        @keyframes spin {
+          from { transform: rotate(0deg);}
+          to { transform: rotate(360deg);}
         }
       `;
 document.head.appendChild(style);
-
