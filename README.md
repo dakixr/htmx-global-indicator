@@ -17,7 +17,7 @@ htmx-global-indicator is a minimal extension for HTMX that adds a **loading over
 ## Features
 
 - Loading indicator overlays **only the HTMX request's target element** (not full-screen).
-- Optional spinner after a configurable delay (`100ms` default).
+- Optional spinner after a configurable delay (`400ms` default).
 - Ignores preloaded (`HX-Preloaded`) requests automatically.
 - Respects `hx-disinherit="global-indicator"` to opt out at the element level.
 - Light and dark mode compatible.
