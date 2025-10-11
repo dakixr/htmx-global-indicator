@@ -1,10 +1,11 @@
 const indicatorMap = new WeakMap();
-const spinnerDelay = 400; // delay in ms before showing the spinner
+const spinnerDelay = 300; // delay in ms before showing the spinner
+const overlayDelay = 50; // delay in ms before showing the overlay (0 = immediate)
 
 // --- GLOBAL OVERLAY SPINNER ---
 let globalOverlay = null;
 let globalSpinner = null;
-let globalOverlayTimer = null;
+let activeGlobalCount = 0; // number of in-flight global (body/boosted) requests
 function showGlobalOverlay() {
   if (!globalOverlay) {
     globalOverlay = document.createElement("div");
@@ -39,10 +40,29 @@ function hideGlobalOverlayAndSpinner() {
   globalSpinner = null;
 }
 
+function finalizeRequest(xhr) {
+  const entry = indicatorMap.get(xhr);
+  if (!entry) return;
+  if (entry.overlayTimer) clearTimeout(entry.overlayTimer);
+  if (entry.spinnerTimer) clearTimeout(entry.spinnerTimer);
+
+  if (entry.isGlobal) {
+    activeGlobalCount = Math.max(0, activeGlobalCount - 1);
+    if (activeGlobalCount === 0) {
+      hideGlobalOverlayAndSpinner();
+    }
+  } else if (entry.el) {
+    entry.el.classList.remove("show-spinner");
+    entry.el.classList.remove("htmx-loading");
+  }
+
+  indicatorMap.delete(xhr);
+}
+
 htmx.defineExtension("global-indicator", {
   onEvent: function (name, evt) {
-    // scope requests and delay spinner separately
-    if (name === "htmx:beforeRequest") {
+    // Start indicators only for real requests to avoid preload side-effects
+    if (name === "htmx:beforeSend") {
       // ignore preloaded requests
       if (evt.detail.requestConfig?.headers?.["HX-Preloaded"] === "true") {
         return;
@@ -55,23 +75,40 @@ htmx.defineExtension("global-indicator", {
       var xhr = evt.detail.xhr;
       // Detect if target is <body> or a boosted request
       var isBody = target === document.body;
-      var isBoosted = evt.detail.boosted === true || evt.detail.elt.hasAttribute("hx-boost");
+      var isBoosted =
+        evt.detail.boosted === true || evt.detail.elt.hasAttribute("hx-boost");
       if (isBody || isBoosted) {
-        showGlobalOverlay(); // Show overlay instantly
-        globalOverlayTimer = setTimeout(showGlobalSpinner, spinnerDelay);
-        indicatorMap.set(xhr, { el: null, timer: globalOverlayTimer, isGlobal: true });
+        activeGlobalCount += 1;
+        var entryGlobal = { el: null, overlayTimer: null, spinnerTimer: null, isGlobal: true };
+        indicatorMap.set(xhr, entryGlobal);
+        entryGlobal.overlayTimer = setTimeout(function () {
+          if (!indicatorMap.has(xhr)) return;
+          if (activeGlobalCount <= 0) return;
+          showGlobalOverlay(); // Show overlay after delay
+          entryGlobal.spinnerTimer = setTimeout(function () {
+            if (!indicatorMap.has(xhr)) return;
+            showGlobalSpinner();
+          }, spinnerDelay);
+        }, overlayDelay);
       } else {
-        target.classList.add("htmx-loading");
-        var spinnerTimer = setTimeout(function () {
-          target.classList.add("show-spinner");
-        }, spinnerDelay);
-        indicatorMap.set(xhr, { el: target, timer: spinnerTimer, isGlobal: false });
+        var entryLocal = { el: target, overlayTimer: null, spinnerTimer: null, isGlobal: false };
+        indicatorMap.set(xhr, entryLocal);
+        entryLocal.overlayTimer = setTimeout(function () {
+          if (!indicatorMap.has(xhr)) return;
+          target.classList.add("htmx-loading");
+          entryLocal.spinnerTimer = setTimeout(function () {
+            if (!indicatorMap.has(xhr)) return;
+            target.classList.add("show-spinner");
+          }, spinnerDelay);
+        }, overlayDelay);
       }
     } else if (
       name === "htmx:afterRequest" ||
       name === "htmx:responseError" ||
       name === "htmx:abort" ||
       name === "htmx:beforeOnLoad" ||
+      name === "htmx:afterSwap" ||
+      name === "htmx:historyRestore" ||
       name === "htmx:timeout" ||
       name === "htmx:sendError" ||
       name === "htmx:swapError" ||
@@ -79,17 +116,7 @@ htmx.defineExtension("global-indicator", {
       name === "htmx:sendAbort"
     ) {
       var xhr = evt.detail.xhr;
-      var entry = indicatorMap.get(xhr);
-      if (entry) {
-        clearTimeout(entry.timer);
-        if (entry.isGlobal) {
-          hideGlobalOverlayAndSpinner();
-        } else if (entry.el) {
-          entry.el.classList.remove("show-spinner");
-          entry.el.classList.remove("htmx-loading");
-        }
-        indicatorMap.delete(xhr);
-      }
+      if (xhr) finalizeRequest(xhr);
     }
   },
 });
@@ -111,7 +138,7 @@ style.textContent = `
           to { opacity: 1; }
         }
         .dark .htmx-loading::before {
-            background: rgba(0, 0, 0);
+            background: oklch(0.145 0 0);
         }
         .htmx-loading.show-spinner::after {
           position: absolute;
@@ -138,12 +165,12 @@ style.textContent = `
           position: fixed;
           top: 0; left: 0; width: 100vw; height: 100vh;
           z-index: 100000;
-          background: #fff;
+          background: oklch(0.145 0 0);
           align-items: center;
           justify-content: center;
         }
         .dark .htmx-global-overlay-spinner {
-          background: #000;
+          background: oklch(0.145 0 0);
         }
         .htmx-global-spinner {
           width: 3rem; height: 3rem;
