@@ -1,6 +1,6 @@
 const indicatorMap = new WeakMap();
 const spinnerDelay = 300; // delay in ms before showing the spinner
-const overlayDelay = 50; // delay in ms before showing the overlay (0 = immediate)
+const overlayDelay = 100; // delay in ms before showing the overlay (0 = immediate)
 
 // --- GLOBAL OVERLAY SPINNER ---
 let globalOverlay = null;
@@ -61,8 +61,8 @@ function finalizeRequest(xhr) {
 
 htmx.defineExtension("global-indicator", {
   onEvent: function (name, evt) {
-    // Start indicators only for real requests to avoid preload side-effects
-    if (name === "htmx:beforeSend") {
+    // scope requests and delay spinner separately
+    if (name === "htmx:beforeRequest") {
       // ignore preloaded requests
       if (evt.detail.requestConfig?.headers?.["HX-Preloaded"] === "true") {
         return;
