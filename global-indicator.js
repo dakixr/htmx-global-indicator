@@ -3,6 +3,7 @@
   const xhrToRequestId = new WeakMap();
   const spinnerDelay = 400; // delay in ms before showing the spinner
   const overlayDelay = 100; // delay in ms before showing the overlay (0 = immediate)
+  const processedEntries = new WeakSet(); // guard against double-finalization of shared entries
 
   // --- GLOBAL OVERLAY SPINNER ---
   let globalOverlay = null;
@@ -48,6 +49,9 @@
         name === "htmx:afterSwap" ||
         name === "htmx:beforeSwap" ||
         name === "htmx:historyRestore" ||
+        name === "htmx:beforeHistoryUpdate" ||
+        name === "htmx:historyCacheMissLoad" ||
+        name === "htmx:historyCacheMissLoadError" ||
         name === "htmx:timeout" ||
         name === "htmx:sendError" ||
         name === "htmx:swapError" ||
@@ -59,75 +63,105 @@
         name === "htmx:beforeOnLoad" ||
         name === "htmx:afterOnLoad"
       ) {
+        // Handle history + DOM lifecycle robustly
+        if (name === "htmx:historyRestore") {
+          var historyEl = evt.detail && (evt.detail.historyElt || evt.detail.target || evt.detail.elt);
+          if (!finalizeByElementDeep(historyEl)) {
+            clearAllIndicators();
+          }
+          return;
+        }
+        if (name === "htmx:beforeHistoryUpdate" || name === "htmx:historyCacheMissLoad" || name === "htmx:historyCacheMissLoadError") {
+          clearAllIndicators();
+          return;
+        }
         var xhr = evt.detail.xhr;
         var didFinalize = false;
         if (xhr) didFinalize = finalizeRequest(xhr);
         if (!didFinalize) {
           var el = evt.detail && (evt.detail.target || evt.detail.elt);
-          if (el) finalizeByElement(el);
+          if (el) finalizeByElementDeep(el);
         }
       }
     },
   });
 
   function addLocalIndicator(requestId, target) {
-    var entryLocal = {
-      el: target,
-      overlayTimer: null,
-      spinnerTimer: null,
-      isGlobal: false,
-      overlayEl: null,
-      spinnerEl: null,
-    };
+    var entryLocal = getExistingLocalEntry(target);
+    var isNew = false;
+    if (!entryLocal) {
+      isNew = true;
+      entryLocal = {
+        el: target,
+        overlayTimer: null,
+        spinnerTimer: null,
+        isGlobal: false,
+        overlayEl: null,
+        spinnerEl: null,
+        ids: new Set(),
+      };
+    }
     indicatorMap.set(requestId, entryLocal);
-    entryLocal.overlayTimer = setTimeout(function () {
-      if (!indicatorMap.has(requestId)) return;
-      // create a fixed overlay that covers the target viewport
-      if (!entryLocal.overlayEl) {
-        var overlay = document.createElement("div");
-        overlay.className = "htmx-local-overlay";
-        document.body.appendChild(overlay);
-        entryLocal.overlayEl = overlay;
-        positionOverlay(overlay, target);
-      }
-      target.classList.add("htmx-loading");
-    }, overlayDelay);
-    entryLocal.spinnerTimer = setTimeout(function () {
-      if (!indicatorMap.has(requestId)) return;
-      // ensure overlay exists
-      if (!entryLocal.overlayEl) {
-        var overlay = document.createElement("div");
-        overlay.className = "htmx-local-overlay";
-        document.body.appendChild(overlay);
-        entryLocal.overlayEl = overlay;
-        positionOverlay(overlay, target);
-      }
-      if (!entryLocal.spinnerEl) {
-        var spinner = document.createElement("div");
-        spinner.className = "htmx-local-spinner";
-        entryLocal.overlayEl.appendChild(spinner);
-        entryLocal.spinnerEl = spinner;
-      }
-      target.classList.add("show-spinner");
-    }, spinnerDelay);
+    entryLocal.ids.add(requestId);
+    if (isNew) {
+      entryLocal.overlayTimer = setTimeout(function () {
+        if (!hasAnyRequest(entryLocal)) return;
+        // create a fixed overlay that covers the target viewport
+        if (!entryLocal.overlayEl) {
+          var overlay = document.createElement("div");
+          overlay.className = "htmx-local-overlay";
+          document.body.appendChild(overlay);
+          entryLocal.overlayEl = overlay;
+          positionOverlay(overlay, target);
+        }
+        target.classList.add("htmx-loading");
+      }, overlayDelay);
+      entryLocal.spinnerTimer = setTimeout(function () {
+        if (!hasAnyRequest(entryLocal)) return;
+        // ensure overlay exists
+        if (!entryLocal.overlayEl) {
+          var overlay = document.createElement("div");
+          overlay.className = "htmx-local-overlay";
+          document.body.appendChild(overlay);
+          entryLocal.overlayEl = overlay;
+          positionOverlay(overlay, target);
+        }
+        if (!entryLocal.spinnerEl) {
+          var spinner = document.createElement("div");
+          spinner.className = "htmx-local-spinner";
+          entryLocal.overlayEl.appendChild(spinner);
+          entryLocal.spinnerEl = spinner;
+        }
+        target.classList.add("show-spinner");
+      }, spinnerDelay);
+    }
   }
 
   function addGlobalIndicator(requestId) {
-    var entryGlobal = {
-      el: null,
-      overlayTimer: null,
-      spinnerTimer: null,
-      isGlobal: true,
-    };
+    var entryGlobal = getExistingGlobalEntry();
+    var isNew = false;
+    if (!entryGlobal) {
+      isNew = true;
+      entryGlobal = {
+        el: null,
+        overlayTimer: null,
+        spinnerTimer: null,
+        isGlobal: true,
+        ids: new Set(),
+      };
+    }
     indicatorMap.set(requestId, entryGlobal);
-    entryGlobal.overlayTimer = setTimeout(function () {
-      if (!indicatorMap.has(requestId)) return;
-      showGlobalOverlay(); // Show overlay after delay
-    }, overlayDelay);
-    entryGlobal.spinnerTimer = setTimeout(function () {
-      if (!indicatorMap.has(requestId)) return;
-      showGlobalSpinner();
-    }, spinnerDelay);
+    entryGlobal.ids.add(requestId);
+    if (isNew) {
+      entryGlobal.overlayTimer = setTimeout(function () {
+        if (!hasAnyRequest(entryGlobal)) return;
+        showGlobalOverlay(); // Show overlay after delay
+      }, overlayDelay);
+      entryGlobal.spinnerTimer = setTimeout(function () {
+        if (!hasAnyRequest(entryGlobal)) return;
+        showGlobalSpinner();
+      }, spinnerDelay);
+    }
   }
 
   function showGlobalOverlay() {
@@ -168,35 +202,50 @@
     const requestId = (xhr && xhrToRequestId.get(xhr)) || (xhr && xhr._globalIndicatorId);
     const entry = indicatorMap.get(requestId);
     if (!entry) return false;
-    if (entry.overlayTimer) clearTimeout(entry.overlayTimer);
-    if (entry.spinnerTimer) clearTimeout(entry.spinnerTimer);
-    if (entry.isGlobal) {
-      hideGlobalOverlayAndSpinner();
-    } else if (entry.el) {
-      entry.el.classList.remove("show-spinner");
-      entry.el.classList.remove("htmx-loading");
-      if (entry.overlayEl && entry.overlayEl.parentNode) {
-        entry.overlayEl.parentNode.removeChild(entry.overlayEl);
-      }
-      entry.overlayEl = null;
-      entry.spinnerEl = null;
+    // remove this requestId from shared entry
+    if (entry.ids && entry.ids.size) {
+      entry.ids.delete(requestId);
     }
-
     indicatorMap.delete(requestId);
-    return true;
+    // if other requests still reference this entry, keep it visible
+    if (hasAnyRequest(entry)) return true;
+    return finalizeEntry(entry);
   }
   
   function finalizeByElement(el) {
     if (!el) return false;
-    var foundId = null;
-    for (const [id, entry] of indicatorMap) {
-      if (entry.el === el) {
-        foundId = id;
-        break;
+    var finalized = false;
+    const entriesToFinalize = new Set();
+    for (const [, entry] of indicatorMap) {
+      if (entry.isGlobal) continue;
+      var target = entry.el;
+      if (!target) continue;
+      if (target === el || target.contains(el) || el.contains(target)) {
+        entriesToFinalize.add(entry);
       }
     }
-    if (!foundId) return false;
-    const entry = indicatorMap.get(foundId);
+    entriesToFinalize.forEach(function(entry){
+      finalized = finalizeEntry(entry) || finalized;
+    });
+    return finalized;
+  }
+
+  function finalizeByElementDeep(rootEl) {
+    if (!rootEl) return false;
+    return finalizeByElement(rootEl);
+  }
+
+  function clearAllIndicators() {
+    const uniqueEntries = new Set();
+    for (const [, entry] of indicatorMap) {
+      uniqueEntries.add(entry);
+    }
+    uniqueEntries.forEach(function(entry){ finalizeEntry(entry); });
+  }
+
+  function finalizeEntry(entry) {
+    if (!entry || processedEntries.has(entry)) return false;
+    processedEntries.add(entry);
     if (entry.overlayTimer) clearTimeout(entry.overlayTimer);
     if (entry.spinnerTimer) clearTimeout(entry.spinnerTimer);
     if (entry.isGlobal) {
@@ -210,8 +259,37 @@
       entry.overlayEl = null;
       entry.spinnerEl = null;
     }
-    indicatorMap.delete(foundId);
+    // remove all requestId mappings that point at this entry
+    if (entry.ids) {
+      entry.ids.forEach(function(id){ indicatorMap.delete(id); });
+      entry.ids.clear();
+    } else {
+      // best effort: remove one-off keys
+      for (const [id, e] of indicatorMap) {
+        if (e === entry) indicatorMap.delete(id);
+      }
+    }
     return true;
+  }
+
+  function getExistingLocalEntry(target) {
+    for (const [, entry] of indicatorMap) {
+      if (!entry.isGlobal && entry.el === target) {
+        return entry;
+      }
+    }
+    return null;
+  }
+
+  function getExistingGlobalEntry() {
+    for (const [, entry] of indicatorMap) {
+      if (entry.isGlobal) return entry;
+    }
+    return null;
+  }
+
+  function hasAnyRequest(entry) {
+    return !!(entry && entry.ids && entry.ids.size > 0);
   }
 
   function generateRequestId() {
