@@ -348,7 +348,7 @@
           position: fixed;
           top: 0; left: 0; width: 100vw; height: 100vh;
           z-index: 100000;
-          background: oklch(0.145 0 0);
+          background: rgba(255, 255, 255, 0.9);
           align-items: center;
           justify-content: center;
         }
